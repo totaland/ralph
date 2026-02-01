@@ -2,42 +2,59 @@
 
 ## Overview
 
-Ralph is an autonomous AI agent loop that runs Amp repeatedly until all PRD items are complete. Each iteration is a fresh Amp instance with clean context.
+Ralph v2 is a phase-based autonomous AI agent loop that runs Amp repeatedly until all tasks are complete. Each iteration is a fresh Amp instance with clean context.
+
+## Architecture
+
+Three-phase system:
+1. **Librarian** - Discovers codebase structure, writes Codebase Map
+2. **Oracle** - Breaks goal into small tasks with context pointers
+3. **Worker** - Implements one task per iteration, writes notes for next
 
 ## Commands
 
 ```bash
+# Plan tasks (run oracle to break down goal)
+./ralph.sh plan
+
+# Run workers (implement tasks one at a time)
+./ralph.sh [max_iterations]
+
 # Run the flowchart dev server
 cd flowchart && npm run dev
 
 # Build the flowchart
 cd flowchart && npm run build
-
-# Run Ralph (from your project that has prd.json)
-./ralph.sh [max_iterations]
 ```
 
 ## Key Files
 
-- `ralph.sh` - The bash loop that spawns fresh Amp instances
-- `prompt.md` - Instructions given to each Amp instance
-- `prd.json.example` - Example PRD format
-- `flowchart/` - Interactive React Flow diagram explaining how Ralph works
+- `ralph.sh` - Phase-based bash loop
+- `tasks.md` - Single source of truth (goal, map, tasks, notes)
+- `tasks.md.example` - Template to copy
+- `prompt.md` - Worker prompt (uses librarian for context)
+- `prompt.plan.md` - Planning prompt (uses oracle)
+- `flowchart/` - Interactive React Flow diagram
 
-## Flowchart
+## Status Flow
 
-The `flowchart/` directory contains an interactive visualization built with React Flow. It's designed for presentations - click through to reveal each step with animations.
+```
+PLANNING_PENDING → IMPLEMENTING → COMPLETE
+   (oracle)         (worker)
+```
 
-To run locally:
+## Model Configuration
+
+Override via environment:
 ```bash
-cd flowchart
-npm install
-npm run dev
+export RALPH_MODEL="claude-sonnet"
 ```
 
 ## Patterns
 
+- Single prompt uses Amp's built-in `librarian` and `oracle` tools
 - Each iteration spawns a fresh Amp instance with clean context
-- Memory persists via git history, `progress.txt`, and `prd.json`
-- Stories should be small enough to complete in one context window
-- Always update AGENTS.md with discovered patterns for future iterations
+- Memory persists via git history and `tasks.md`
+- Tasks should be small enough to complete in one context window
+- Workers write findings/context for next iteration in task Notes
+- Context pointers in each task reduce token usage

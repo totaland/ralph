@@ -1,0 +1,14 @@
+# Ralph Tasks
+
+## Project
+- Goal: Add priority levels to tasks with filtering and editing capabilities
+- Repo: https://github.com/example/myapp
+- Branch: ralph/task-priority
+- Status: PLANNING_PENDING
+- Updated: 2026-01-30
+
+## Task List
+> Created by `./ralph.sh plan` using Oracle. Each task is independently completable.
+> After planning, status changes to IMPLEMENTING and workers execute tasks.
+
+(Run `./ralph.sh plan` to generate tasks from the goal above)

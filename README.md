@@ -1,11 +1,13 @@
-# Ralph
+# Ralph v2
 
 This is the script you can use to install this from every where
 /Users/M060883/git/wdp/mcp/ai-toolkit/ralph/install.sh 
 
 ![Ralph](ralph.webp)
 
-Ralph is an autonomous AI agent loop that runs [Amp](https://ampcode.com) repeatedly until all PRD items are complete. Each iteration is a fresh Amp instance with clean context. Memory persists via git history, `progress.txt`, and `prd.json`.
+Ralph is an autonomous AI agent loop that runs [Amp](https://ampcode.com) repeatedly until all tasks are complete. Each iteration is a fresh Amp instance with clean context.
+
+**v2 Architecture:** Three-phase system (Librarian → Oracle → Worker) with a single `tasks.md` file for state management.
 
 Based on [Geoffrey Huntley's Ralph pattern](https://ghuntley.com/ralph/).
 
@@ -14,184 +16,185 @@ Based on [Geoffrey Huntley's Ralph pattern](https://ghuntley.com/ralph/).
 ## Prerequisites
 
 - [Amp CLI](https://ampcode.com) installed and authenticated
-- `jq` installed (`brew install jq` on macOS)
 - A git repository for your project
 
-## Setup
-
-### Option 1: Copy to your project
-
-Copy the ralph files into your project:
+## Quick Start
 
 ```bash
-# From your project root
-mkdir -p scripts/ralph
-cp /path/to/ralph/ralph.sh scripts/ralph/
-cp /path/to/ralph/prompt.md scripts/ralph/
-chmod +x scripts/ralph/ralph.sh
+# 1. Copy tasks.md.example and customize
+cp tasks.md.example tasks.md
+
+# 2. Edit tasks.md with your goal
+#    - Goal: <what you want to build>
+#    - Branch: ralph/<feature-name>
+#    - Status: PLANNING_PENDING
+
+# 3. Run planning (oracle creates task breakdown)
+./ralph.sh plan
+
+# 4. Review tasks.md, then run workers
+./ralph.sh [max_iterations]
 ```
 
-### Option 2: Install skills globally
+## How It Works
 
-Copy the skills to your Amp config for use across all projects:
+Ralph v2 uses a two-step workflow:
 
-```bash
-cp -r skills/prd ~/.config/amp/skills/
-cp -r skills/ralph ~/.config/amp/skills/
-```
-
-### Configure Amp auto-handoff (recommended)
-
-Add to `~/.config/amp/settings.json`:
-
-```json
-{
-  "amp.experimental.autoHandoff": { "context": 90 }
-}
-```
-
-This enables automatic handoff when context fills up, allowing Ralph to handle large stories that exceed a single context window.
-
-## Workflow
-
-### 1. Create a PRD
-
-Use the PRD skill to generate a detailed requirements document:
+| Step | Command | Tool | Purpose |
+|------|---------|------|---------|
+| 1 | `./ralph.sh plan` | **Oracle** | Breaks goal into small tasks |
+| 2 | `./ralph.sh` | **Worker** + **Librarian** | Implements tasks, updates context |
 
 ```
-Load the prd skill and create a PRD for [your feature description]
+┌─────────────────────────────────────────────────────────────┐
+│                        tasks.md                              │
+│  ┌──────────────┐   ┌─────────────────────────────────────┐ │
+│  │ Project      │   │ Task List                           │ │
+│  │ - Goal       │   │ T001 [x] Add priority - Notes...    │ │
+│  │ - Branch     │   │ T002 [ ] Create UI                  │ │
+│  │ - Status     │   │ T003 [ ] Add filter                 │ │
+│  └──────────────┘   └─────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+         ↑                         ↑
+     You write              Oracle creates (plan)
+                                   │
+                                   ↓
+                           Worker implements
+                           Librarian writes context
 ```
-
-Answer the clarifying questions. The skill saves output to `tasks/prd-[feature-name].md`.
-
-### 2. Convert PRD to Ralph format
-
-Use the Ralph skill to convert the markdown PRD to JSON:
-
-```
-Load the ralph skill and convert tasks/prd-[feature-name].md to prd.json
-```
-
-This creates `prd.json` with user stories structured for autonomous execution.
-
-### 3. Run Ralph
-
-```bash
-./scripts/ralph/ralph.sh [max_iterations]
-```
-
-Default is 10 iterations.
-
-Ralph will:
-1. Create a feature branch (from PRD `branchName`)
-2. Pick the highest priority story where `passes: false`
-3. Implement that single story
-4. Run quality checks (typecheck, tests)
-5. Commit if checks pass
-6. Update `prd.json` to mark story as `passes: true`
-7. Append learnings to `progress.txt`
-8. Repeat until all stories pass or max iterations reached
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `ralph.sh` | The bash loop that spawns fresh Amp instances |
-| `prompt.md` | Instructions given to each Amp instance |
-| `prd.json` | User stories with `passes` status (the task list) |
-| `prd.json.example` | Example PRD format for reference |
-| `progress.txt` | Append-only learnings for future iterations |
-| `skills/prd/` | Skill for generating PRDs |
-| `skills/ralph/` | Skill for converting PRDs to JSON |
-| `flowchart/` | Interactive visualization of how Ralph works |
+| `ralph.sh` | Phase-based bash loop |
+| `tasks.md` | Single source of truth (goal, tasks, notes) |
+| `tasks.md.example` | Template to copy |
+| `prompt.md` | Worker prompt (uses librarian for context) |
+| `prompt.plan.md` | Planning prompt (uses oracle) |
+| `skills/` | Amp skills for PRD and conversion |
+| `flowchart/` | Interactive visualization |
 
-## Flowchart
+## tasks.md Structure
 
-[![Ralph Flowchart](ralph-flowchart.png)](https://snarktank.github.io/ralph/)
+```markdown
+# Ralph Tasks
 
-**[View Interactive Flowchart](https://snarktank.github.io/ralph/)** - Click through to see each step with animations.
+## Project
+- Goal: Add priority levels to tasks
+- Branch: ralph/task-priority
+- Status: PLANNING_PENDING
+- Updated: 2026-01-30
 
-The `flowchart/` directory contains the source code. To run locally:
+## Task List
+> Created by `./ralph.sh plan`, executed by Worker
+
+### T001 - Add priority column
+- Status: [ ] TODO
+- Priority: P1
+- Outcome: Tasks table has priority column
+- Context:
+  - `db/schema.ts`
+- Checks:
+  - `npm run typecheck`
+- Notes:
+  - Thread: <amp thread url>
+  - Changed: Added priority enum column
+  - Files: `db/schema.ts`, `db/migrations/001.sql`
+  - Findings: Use sql`CREATE TYPE` for enums
+  - Next context: `src/types/task.ts` needs type export
+```
+
+## Status Flow
+
+```
+PLANNING_PENDING → IMPLEMENTING → COMPLETE
+   ./ralph.sh plan   ./ralph.sh
+```
+
+## Model Configuration
+
+Override model via environment variable:
 
 ```bash
-cd flowchart
-npm install
-npm run dev
+export RALPH_MODEL="claude-sonnet"
+./ralph.sh
 ```
 
 ## Critical Concepts
 
 ### Each Iteration = Fresh Context
 
-Each iteration spawns a **new Amp instance** with clean context. The only memory between iterations is:
-- Git history (commits from previous iterations)
-- `progress.txt` (learnings and context)
-- `prd.json` (which stories are done)
+Each iteration spawns a **new Amp instance** with clean context. Memory persists via:
+- Git history (commits)
+- `tasks.md` (codebase map, task notes, findings)
 
 ### Small Tasks
 
-Each PRD item should be small enough to complete in one context window. If a task is too big, the LLM runs out of context before finishing and produces poor code.
+Each task should be small enough to complete in one context window (~15-30 min of work).
 
-Right-sized stories:
-- Add a database column and migration
-- Add a UI component to an existing page
-- Update a server action with new logic
-- Add a filter dropdown to a list
+✅ Right-sized:
+- Add a database column
+- Create a UI component
+- Add a filter dropdown
 
-Too big (split these):
-- "Build the entire dashboard"
+❌ Too big (split these):
+- "Build the dashboard"
 - "Add authentication"
-- "Refactor the API"
 
-### AGENTS.md Updates Are Critical
+### Context Pointers
 
-After each iteration, Ralph updates the relevant `AGENTS.md` files with learnings. This is key because Amp automatically reads these files, so future iterations (and future human developers) benefit from discovered patterns, gotchas, and conventions.
+Each task includes `Context:` with file paths. Workers read these first instead of searching the whole codebase. This saves tokens.
 
-Examples of what to add to AGENTS.md:
-- Patterns discovered ("this codebase uses X for Y")
-- Gotchas ("do not forget to update Z when changing W")
-- Useful context ("the settings panel is in component X")
+### Notes for Next Iteration
 
-### Feedback Loops
+After completing a task, Worker writes:
+- What changed
+- Files modified
+- Findings/gotchas
+- Relevant files for next task
 
-Ralph only works if there are feedback loops:
-- Typecheck catches type errors
-- Tests verify behavior
-- CI must stay green (broken code compounds across iterations)
-
-### Browser Verification for UI Stories
-
-Frontend stories must include "Verify in browser using dev-browser skill" in acceptance criteria. Ralph will use the dev-browser skill to navigate to the page, interact with the UI, and confirm changes work.
-
-### Stop Condition
-
-When all stories have `passes: true`, Ralph outputs `<promise>COMPLETE</promise>` and the loop exits.
+This context helps subsequent Workers avoid re-discovering the same information.
 
 ## Debugging
 
-Check current state:
-
 ```bash
-# See which stories are done
-cat prd.json | jq '.userStories[] | {id, title, passes}'
+# Check current status
+grep "^- Status:" tasks.md
 
-# See learnings from previous iterations
-cat progress.txt
+# See which tasks are done
+grep -E "^### T[0-9]|^- Status:" tasks.md
 
 # Check git history
 git log --oneline -10
 ```
 
-## Customizing prompt.md
-
-Edit `prompt.md` to customize Ralph's behavior for your project:
-- Add project-specific quality check commands
-- Include codebase conventions
-- Add common gotchas for your stack
-
 ## Archiving
 
-Ralph automatically archives previous runs when you start a new feature (different `branchName`). Archives are saved to `archive/YYYY-MM-DD-feature-name/`.
+Ralph automatically archives `tasks.md` when you switch branches. Archives go to `archive/YYYY-MM-DD-feature-name/`.
+
+## Migration from v1
+
+If you have existing `prd.json` files:
+
+1. Create `tasks.md` from template
+2. Copy goal/branch from `prd.json`
+3. Set `Status: PLANNING_PENDING` (skip Librarian if you know the codebase)
+4. Let Oracle convert your user stories to tasks
+
+Or manually convert:
+- `prd.json` user stories → `tasks.md` Task List
+- `progress.txt` patterns → `tasks.md` Codebase Map
+
+## Flowchart
+
+[![Ralph Flowchart](ralph-flowchart.png)](https://snarktank.github.io/ralph/)
+
+**[View Interactive Flowchart](https://snarktank.github.io/ralph/)**
+
+```bash
+cd flowchart && npm install && npm run dev
+```
 
 ## References
 

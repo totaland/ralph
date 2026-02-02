@@ -16,6 +16,7 @@ Each task should:
 - Include context files to read first
 - Include acceptance checks (test commands)
 - Specify dependencies on other tasks (if any)
+- Assign a Stage number to group parallelizable tasks into waves (1, 2, 3...)
 
 Goal: [the goal]
 Codebase context: [any known info about the codebase]"
@@ -29,6 +30,7 @@ Update `tasks.md` with the task list. Each task must follow this format:
 ### T001 - <short title>
 - Status: [ ] TODO
 - Priority: P1
+- Stage: 1
 - Depends: <comma-separated task IDs, or empty if no dependencies>
 - Outcome: <one line describing expected result>
 - Context:
@@ -52,6 +54,17 @@ Dependencies create a DAG (directed acyclic graph). Ralph will:
 1. Only select tasks whose dependencies are all marked `[x]` (complete)
 2. Skip tasks with pending dependencies
 3. Allow parallel-safe tasks (no shared dependencies) to be candidates
+
+## Parallel Stages (Waves)
+
+Use `- Stage:` to group tasks into parallel waves. Ralph will only run tasks from
+the **lowest stage that has ready work**, enabling controlled parallelism:
+
+- Stage 1: earliest foundational tasks
+- Stage 2+: subsequent waves that can run in parallel once prerequisites are done
+
+Stages do **not** replace dependencies; they refine ordering when multiple tasks
+are ready. A task must still have its dependencies marked `[x]` to be runnable.
 
 ### Dependency Ordering Principles
 
@@ -95,9 +108,9 @@ Follow this general ordering when designing task dependencies:
 Example: Feature with parallel work streams
 
 T001 - Add priority schema          (no deps)
-T002 - Create PriorityBadge         (Depends: T001)
-T003 - Add priority to API          (Depends: T001)
-T004 - Add priority filter          (Depends: T002, T003)
+T002 - Create PriorityBadge         (Depends: T001, Stage: 2)
+T003 - Add priority to API          (Depends: T001, Stage: 2)
+T004 - Add priority filter          (Depends: T002, T003, Stage: 3)
 T005 - E2E tests for priority       (Depends: T004)
 ```
 

@@ -201,6 +201,24 @@ get_task_depends() {
   ' "$TASKS_FILE"
 }
 
+get_task_stage() {
+  local task="$1"
+  awk -v task="$task" '
+    $0 ~ "^### " task " " { in_task = 1; next }
+    in_task && /^- Stage:/ {
+      sub(/^- Stage:[[:space:]]*/, "")
+      gsub(/[^0-9]/, "")
+      if ($0 == "") {
+        print 0
+      } else {
+        print $0
+      }
+      exit
+    }
+    in_task && /^### T[0-9]+/ { exit }
+  ' "$TASKS_FILE"
+}
+
 is_task_ready() {
   local task="$1"
   local depends
@@ -289,12 +307,33 @@ list_ready_tasks() {
   local todos
   todos="$(list_todo_tasks)"
 
+  local min_stage=""
+  local ready_entries=()
+
   while IFS= read -r task; do
     [ -z "$task" ] && continue
     if is_task_ready "$task"; then
-      echo "$task"
+      local stage
+      stage="$(get_task_stage "$task")"
+      if ! [[ "$stage" =~ ^[0-9]+$ ]]; then
+        stage=0
+      fi
+      ready_entries+=("${task}:${stage}")
+      if [ -z "$min_stage" ] || [ "$stage" -lt "$min_stage" ]; then
+        min_stage="$stage"
+      fi
     fi
   done <<< "$todos"
+
+  [ -z "$min_stage" ] && return 0
+
+  for entry in "${ready_entries[@]}"; do
+    local task="${entry%%:*}"
+    local stage="${entry##*:}"
+    if [ "$stage" -eq "$min_stage" ]; then
+      echo "$task"
+    fi
+  done
 }
 
 extract_task_block() {
@@ -390,6 +429,17 @@ validate_tasks() {
     # Check for Depends field (required but can be empty)
     if ! echo "$task_block" | grep -qE "^- Depends:"; then
       warnings+=("$task_id: Missing '- Depends:' field")
+    fi
+
+    # Check for Stage field (optional but recommended)
+    if echo "$task_block" | grep -qE "^- Stage:"; then
+      local stage_value
+      stage_value=$(echo "$task_block" | awk '/^- Stage:/ { sub(/^- Stage:[[:space:]]*/, ""); print; exit }')
+      if ! [[ "$stage_value" =~ ^[0-9]+$ ]]; then
+        warnings+=("$task_id: '- Stage:' should be a numeric value (e.g., 1, 2)")
+      fi
+    else
+      warnings+=("$task_id: Missing '- Stage:' field")
     fi
   done <<< "$all_ids"
   

@@ -11,6 +11,7 @@
 > Created by `./ralph.sh plan` using Oracle. Each task is independently completable.
 > After planning, status changes to IMPLEMENTING and workers execute tasks.
 > Tasks with dependencies will be skipped until their dependencies are complete.
+> Tasks are grouped into parallel stages (`- Stage:`) to control which batches run together.
 
 (Run `./ralph.sh plan` to generate tasks from the goal above)
 
@@ -24,6 +25,7 @@ Each task follows this structure:
 ### T001 - <short title>
 - Status: [ ] TODO
 - Priority: P1
+- Stage: 1
 - Depends: 
 - Outcome: <one line describing expected result>
 - Context:
@@ -41,18 +43,21 @@ Each task follows this structure:
 ### T001 - Create database schema
 - Status: [ ] TODO
 - Priority: P1
+- Stage: 1
 - Depends: 
 - Outcome: Priority column added to tasks table
 
 ### T002 - Add API endpoint
 - Status: [ ] TODO
 - Priority: P1
+- Stage: 2
 - Depends: T001
 - Outcome: GET /api/tasks returns priority field
 
 ### T003 - Create UI component
 - Status: [ ] TODO
 - Priority: P2
+- Stage: 2
 - Depends: T001, T002
 - Outcome: PriorityBadge renders correctly
 ```
@@ -61,3 +66,43 @@ In this example:
 - T001 has no dependencies and will be selected first
 - T002 depends on T001, so it won't start until T001 is marked `[x]`
 - T003 depends on both T001 and T002, so it waits for both
+
+### Stage (Parallel Wave) Examples
+
+Stages let the planner group tasks into parallel waves. Ralph will only run tasks
+from the lowest stage that has ready work.
+
+```markdown
+### T001 - Add priority schema
+- Status: [ ] TODO
+- Priority: P1
+- Stage: 1
+- Depends:
+- Outcome: Priority column added to tasks table
+
+### T002 - Create PriorityBadge component
+- Status: [ ] TODO
+- Priority: P2
+- Stage: 2
+- Depends: T001
+- Outcome: PriorityBadge renders correctly
+
+### T003 - Add priority to API
+- Status: [ ] TODO
+- Priority: P1
+- Stage: 2
+- Depends: T001
+- Outcome: GET /api/tasks returns priority field
+
+### T004 - Add priority filter
+- Status: [ ] TODO
+- Priority: P1
+- Stage: 3
+- Depends: T002, T003
+- Outcome: Priority filter works end-to-end
+```
+
+In this example:
+- Stage 1 runs first (T001)
+- Stage 2 runs in parallel once T001 is done (T002 + T003)
+- Stage 3 waits for both T002 and T003 (T004)

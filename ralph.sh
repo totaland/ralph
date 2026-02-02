@@ -18,6 +18,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TASKS_FILE="$SCRIPT_DIR/tasks.md"
 ARCHIVE_DIR="$SCRIPT_DIR/archive"
 LAST_BRANCH_FILE="$SCRIPT_DIR/.last-branch"
+LOCK_DIR="$SCRIPT_DIR/.ralph/locks"
+ITERATION_LOG_DIR="$SCRIPT_DIR/.ralph/iteration-logs"
 
 # Execution history
 HISTORY_DIR="$SCRIPT_DIR/.ralph/history"
@@ -35,6 +37,7 @@ RALPH_MODEL="${RALPH_MODEL:-}"
 # Retry configuration (Phase 2)
 RALPH_MAX_RETRIES="${RALPH_MAX_RETRIES:-2}"
 RALPH_RETRY_DELAY="${RALPH_RETRY_DELAY:-30}"
+RALPH_MAX_PARALLEL="${RALPH_MAX_PARALLEL:-0}"
 
 # Check for command mode
 case "${1:-}" in
@@ -63,6 +66,7 @@ case "${1:-}" in
     echo "  RALPH_MODEL             Override the model (e.g., claude-sonnet)"
     echo "  RALPH_MAX_RETRIES       Max retry attempts (default: 2)"
     echo "  RALPH_RETRY_DELAY       Base delay in seconds (default: 30)"
+    echo "  RALPH_MAX_PARALLEL      Cap parallel workers (0 = no cap)"
     exit 0
     ;;
   *)
@@ -262,6 +266,35 @@ next_task_id() {
 
   echo ""
   return 0
+}
+
+list_todo_tasks() {
+  awk '
+    /^### T[0-9]+/ {
+      match($0, /T[0-9]+/)
+      task = substr($0, RSTART, RLENGTH)
+      in_task = 1
+      next
+    }
+    in_task && /^- Status: \[ \]/ {
+      print task
+      in_task = 0
+      next
+    }
+    /^### T[0-9]+/ { in_task = 0 }
+  ' "$TASKS_FILE"
+}
+
+list_ready_tasks() {
+  local todos
+  todos="$(list_todo_tasks)"
+
+  while IFS= read -r task; do
+    [ -z "$task" ] && continue
+    if is_task_ready "$task"; then
+      echo "$task"
+    fi
+  done <<< "$todos"
 }
 
 extract_task_block() {
@@ -484,31 +517,9 @@ validate_tasks() {
 # ============================================================================
 
 count_ready() {
-  local ready_count=0
-  local todos
-  todos=$(awk '
-    /^### T[0-9]+/ {
-      match($0, /T[0-9]+/)
-      task = substr($0, RSTART, RLENGTH)
-      in_task = 1
-      next
-    }
-    in_task && /^- Status: \[ \]/ {
-      print task
-      in_task = 0
-      next
-    }
-    /^### T[0-9]+/ { in_task = 0 }
-  ' "$TASKS_FILE")
-  
-  while IFS= read -r task; do
-    [ -z "$task" ] && continue
-    if is_task_ready "$task"; then
-      ready_count=$((ready_count + 1))
-    fi
-  done <<< "$todos"
-  
-  echo "$ready_count"
+  local ready_count
+  ready_count=$(list_ready_tasks | wc -l | tr -d ' ')
+  echo "${ready_count:-0}"
 }
 
 count_blocked() {
@@ -651,6 +662,7 @@ show_status() {
 
 run_amp() {
   local prompt_file="${1:-$SCRIPT_DIR/prompt.md}"
+  local output_file="${2:-$LAST_ITERATION_OUTPUT}"
   local model_args=()
 
   # Use model if specified
@@ -658,15 +670,15 @@ run_amp() {
     model_args=(--model "$RALPH_MODEL")
   fi
 
-  : > "$LAST_ITERATION_OUTPUT"
+  : > "$output_file"
 
   set +e
-  amp --dangerously-allow-all "${model_args[@]}" < "$prompt_file" 2>&1 | tee "$LAST_ITERATION_OUTPUT"
+  amp --dangerously-allow-all "${model_args[@]}" < "$prompt_file" 2>&1 | tee "$output_file"
   local amp_exit="${PIPESTATUS[0]:-1}"
   set -e
 
   # Check for completion signal
-  if grep -q "<promise>COMPLETE</promise>" "$LAST_ITERATION_OUTPUT"; then
+  if grep -q "<promise>COMPLETE</promise>" "$output_file"; then
     return "$AMP_COMPLETE_EXIT"
   fi
 
@@ -677,6 +689,7 @@ run_with_retry() {
   local prompt_file="${1:-$SCRIPT_DIR/prompt.md}"
   local task_id="${2:-planning}"
   local iteration="${3:-0}"
+  local output_file="${4:-$LAST_ITERATION_OUTPUT}"
 
   local max_retries="$RALPH_MAX_RETRIES"
   local base_delay="$RALPH_RETRY_DELAY"
@@ -699,7 +712,7 @@ run_with_retry() {
     start_time=$(date +%s)
 
     set +e
-    run_amp "$prompt_file"
+    run_amp "$prompt_file" "$output_file"
     exit_code=$?
     set -e
 
@@ -720,7 +733,7 @@ run_with_retry() {
       echo ""
       echo "❌ Max retries ($max_retries) exhausted"
       echo "   Last exit code: $exit_code"
-      echo "   See: $LAST_ITERATION_OUTPUT"
+      echo "   See: $output_file"
       return "$exit_code"
     fi
 
@@ -734,6 +747,39 @@ run_with_retry() {
 
     attempt=$((attempt + 1))
   done
+
+  return "$exit_code"
+}
+
+make_worker_prompt() {
+  local task_id="$1"
+  local prompt_file
+  prompt_file="$(mktemp "$SCRIPT_DIR/.ralph/prompt.${task_id}.XXXXXX")"
+  cat "$SCRIPT_DIR/prompt.md" > "$prompt_file"
+  {
+    echo ""
+    echo "Assigned Task: $task_id"
+  } >> "$prompt_file"
+  echo "$prompt_file"
+}
+
+run_worker_task() {
+  local task_id="$1"
+  local iteration="$2"
+  local prompt_file
+  local output_file
+  local exit_code=0
+
+  prompt_file="$(make_worker_prompt "$task_id")"
+  output_file="$ITERATION_LOG_DIR/${task_id}_iter_${iteration}.log"
+
+  set +e
+  run_with_retry "$prompt_file" "$task_id" "$iteration" "$output_file"
+  exit_code=$?
+  set -e
+
+  rm -f "$prompt_file"
+  rm -f "$LOCK_DIR/$task_id"
 
   return "$exit_code"
 }
@@ -778,6 +824,8 @@ fi
 
 # Ensure execution history directory exists (T001)
 mkdir -p "$HISTORY_DIR"
+mkdir -p "$LOCK_DIR"
+mkdir -p "$ITERATION_LOG_DIR"
 
 archive_if_branch_changed
 checkout_branch
@@ -812,9 +860,11 @@ echo "🤖 Starting Ralph v2"
 echo "   Max iterations: $MAX_ITERATIONS"
 echo "   Tasks file: $TASKS_FILE"
 echo "   Retry config: max=$RALPH_MAX_RETRIES, base_delay=${RALPH_RETRY_DELAY}s"
+echo "   Parallel cap: ${RALPH_MAX_PARALLEL:-0}"
 echo ""
 
-for i in $(seq 1 "$MAX_ITERATIONS"); do
+iteration=0
+while [ "$iteration" -lt "$MAX_ITERATIONS" ]; do
   status="$(get_status)"
   
   # Check status
@@ -824,15 +874,16 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
       exit 1
       ;;
     IMPLEMENTING)
-      task="$(next_task_id || true)"
-      if [ "${task:-}" = "BLOCKED" ]; then
+      ready_tasks="$(list_ready_tasks || true)"
+      todos="$(list_todo_tasks || true)"
+      if [ -n "$todos" ] && [ -z "$ready_tasks" ]; then
         echo ""
         echo "⛔️  BLOCKED: TODO tasks exist but dependencies are not satisfied."
         echo "   Check the '- Depends:' fields and ensure prerequisite tasks are marked [x]."
-        log_iteration "BLOCKED" "$i" 0 1
+        log_iteration "BLOCKED" "$iteration" 0 1
         exit 1
       fi
-      if [ -z "${task:-}" ]; then
+      if [ -z "${todos:-}" ]; then
         set_status "COMPLETE"
         echo ""
         echo "✅ All tasks complete!"
@@ -841,7 +892,7 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
       fi
       total="$(count_tasks)"
       done_count="$(count_done)"
-      phase_label="WORKER ($task) [$done_count/$total done]"
+      phase_label="WORKER (batch) [$done_count/$total done]"
       ;;
     COMPLETE)
       echo "✅ Already complete. Nothing to do."
@@ -855,24 +906,83 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
       ;;
   esac
   
-  print_header "$phase_label" "$i"
+  print_header "$phase_label" "$((iteration + 1))"
 
-  set +e
-  run_with_retry "$SCRIPT_DIR/prompt.md" "${task:-planning}" "$i"
-  exit_code=$?
-  set -e
+  mapfile -t ready_array <<< "$ready_tasks"
+  available=$((MAX_ITERATIONS - iteration))
+  parallel_cap="$RALPH_MAX_PARALLEL"
+  if ! [[ "$parallel_cap" =~ ^[0-9]+$ ]]; then
+    echo "⚠️  Invalid RALPH_MAX_PARALLEL='$parallel_cap', using 0 (no cap)"
+    parallel_cap=0
+  fi
+  if [ "$parallel_cap" -gt 0 ] && [ "$parallel_cap" -lt "$available" ]; then
+    available="$parallel_cap"
+  fi
 
-  if [ "$exit_code" -eq "$AMP_COMPLETE_EXIT" ]; then
+  batch_tasks=()
+  for task in "${ready_array[@]}"; do
+    [ -n "$task" ] || continue
+    if [ "$available" -le 0 ]; then
+      break
+    fi
+    if [ ! -f "$LOCK_DIR/$task" ]; then
+      : > "$LOCK_DIR/$task"
+      batch_tasks+=("$task")
+      available=$((available - 1))
+    fi
+  done
+
+  if [ "${#batch_tasks[@]}" -eq 0 ]; then
+    echo ""
+    echo "⚠️  No available tasks to run (all ready tasks are locked)."
+    exit 1
+  fi
+
+  echo "🚀 Running batch: ${batch_tasks[*]}"
+
+  pids=()
+  task_ids=()
+  task_iters=()
+  exit_codes=()
+  complete_signal=false
+  failed=false
+
+  for task in "${batch_tasks[@]}"; do
+    iteration=$((iteration + 1))
+    run_worker_task "$task" "$iteration" &
+    pids+=("$!")
+    task_ids+=("$task")
+    task_iters+=("$iteration")
+  done
+
+  for index in "${!pids[@]}"; do
+    pid="${pids[$index]}"
+    task_id="${task_ids[$index]}"
+    task_iter="${task_iters[$index]}"
+    set +e
+    wait "$pid"
+    exit_code=$?
+    set -e
+    exit_codes+=("$exit_code")
+
+    if [ "$exit_code" -eq "$AMP_COMPLETE_EXIT" ]; then
+      complete_signal=true
+    elif [ "$exit_code" -ne 0 ]; then
+      failed=true
+      echo ""
+      echo "❌ Amp run failed for $task_id (exit_code=$exit_code)."
+      echo "   See: $ITERATION_LOG_DIR/${task_id}_iter_${task_iter}.log"
+    fi
+  done
+
+  if [ "$failed" = true ]; then
+    exit 1
+  fi
+
+  if [ "$complete_signal" = true ]; then
     echo ""
     echo "✅ Ralph completed all tasks!"
     exit 0
-  fi
-
-  if [ "$exit_code" -ne 0 ]; then
-    echo ""
-    echo "❌ Amp run failed (exit_code=$exit_code)."
-    echo "   See: $LAST_ITERATION_OUTPUT"
-    exit "$exit_code"
   fi
 done
 

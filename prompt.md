@@ -4,7 +4,9 @@ You are an autonomous coding agent implementing tasks from `tasks.md`.
 
 ## Workflow
 
-1. Read `tasks.md` - find the first task with `- Status: [ ] TODO`
+1. Read `tasks.md`
+   - If this prompt includes an **Assigned Task** line, work only on that task.
+   - Otherwise, find the first task with `- Status: [ ] TODO`
 2. Read the **Context** files listed in that task
 3. Implement the **Outcome**
 4. Run all **Checks** listed
@@ -56,6 +58,16 @@ Otherwise, end normally (next iteration picks up next task).
 - Follow existing code patterns
 - Commit only if checks pass
 - Always use librarian to write context notes
+
+## Assigned Task (optional)
+
+If the runner adds a line like:
+
+```
+Assigned Task: T001
+```
+
+Then **only** work on that task ID for this iteration.
 
 ## Browser Testing
 

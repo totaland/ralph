@@ -3,6 +3,12 @@ prd.json
 progress.txt
 .last-branch
 
+# Execution history + state
+.ralph/
+
+# Last iteration output capture
+.iteration-log.txt
+
 # Archive is optional to commit
 # archive/
 

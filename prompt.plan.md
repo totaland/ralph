@@ -53,6 +53,34 @@ Dependencies create a DAG (directed acyclic graph). Ralph will:
 2. Skip tasks with pending dependencies
 3. Allow parallel-safe tasks (no shared dependencies) to be candidates
 
+### Dependency Ordering Principles
+
+Follow this general ordering when designing task dependencies:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Layer 1: Schema/Types (no dependencies)                    │
+│  ├── Database schemas, migrations                           │
+│  ├── TypeScript types/interfaces                            │
+│  └── API contracts, Zod schemas                             │
+├─────────────────────────────────────────────────────────────┤
+│  Layer 2: Backend (depends on Layer 1)                      │
+│  ├── API endpoints                                          │
+│  ├── Business logic                                         │
+│  └── Database queries                                       │
+├─────────────────────────────────────────────────────────────┤
+│  Layer 3: UI Components (depends on Layer 1 or 2)           │
+│  ├── Reusable components                                    │
+│  ├── Form components                                        │
+│  └── Display components                                     │
+├─────────────────────────────────────────────────────────────┤
+│  Layer 4: Integration (depends on Layer 2 and 3)            │
+│  ├── Page/route integration                                 │
+│  ├── End-to-end flows                                       │
+│  └── Integration tests                                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
 ### Common Dependency Patterns
 
 ✅ Good patterns:
@@ -61,11 +89,29 @@ Dependencies create a DAG (directed acyclic graph). Ralph will:
 - UI tasks depend on API and component tasks
 - Integration/E2E tests depend on feature implementation
 - `T001 → T002 → T003` - linear chain
-- `T001, T002 (parallel) → T003` - depends on both
+- `T001, T002 (parallel) → T003` - fan-in (T003 depends on both)
+
+```
+Example: Feature with parallel work streams
+
+T001 - Add priority schema          (no deps)
+T002 - Create PriorityBadge         (Depends: T001)
+T003 - Add priority to API          (Depends: T001)
+T004 - Add priority filter          (Depends: T002, T003)
+T005 - E2E tests for priority       (Depends: T004)
+```
 
 ❌ Bad patterns:
-- Circular: `T001 → T002 → T001`
-- Over-constraining: Every task depends on the previous
+- Circular: `T001 → T002 → T001` (causes infinite blocking)
+- Over-constraining: Every task depends on the previous (prevents parallelism)
+- Missing dependencies: Task uses types/APIs that aren't built yet
+
+### Validation
+
+Run `./ralph.sh validate` to check:
+- All dependencies reference existing task IDs
+- No circular dependencies exist
+- Task format is correct
 
 ## Task Design Guidelines
 
@@ -81,4 +127,6 @@ Dependencies create a DAG (directed acyclic graph). Ralph will:
 
 ## After Planning
 
-Set `- Status: IMPLEMENTING` so Ralph can start executing tasks.
+1. Run `./ralph.sh validate` to verify task structure
+2. Review the dependency graph makes sense
+3. Set `- Status: IMPLEMENTING` so Ralph can start executing tasks

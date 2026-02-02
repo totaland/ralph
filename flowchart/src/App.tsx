@@ -21,60 +21,83 @@ import './App.css';
 const nodeWidth = 240;
 const nodeHeight = 70;
 
-// Setup phase - horizontal at top
-// Loop phase - circular arrangement below
-// Exit - at bottom center
-
-type Phase = 'setup' | 'loop' | 'decision' | 'done';
+type Phase = 'setup' | 'loop' | 'decision' | 'done' | 'retry' | 'validate';
 
 const phaseColors: Record<Phase, { bg: string; border: string }> = {
   setup: { bg: '#f0f7ff', border: '#4a90d9' },
   loop: { bg: '#f5f5f5', border: '#666666' },
   decision: { bg: '#fff8e6', border: '#c9a227' },
   done: { bg: '#f0fff4', border: '#38a169' },
+  retry: { bg: '#fff0f0', border: '#e53e3e' },
+  validate: { bg: '#f0f0ff', border: '#805ad5' },
 };
 
 const allSteps: { id: string; label: string; description: string; phase: Phase }[] = [
   // Setup phase (vertical)
-  { id: '1', label: 'You write a PRD', description: 'Define what you want to build', phase: 'setup' },
-  { id: '2', label: 'Convert to prd.json', description: 'Break into small user stories', phase: 'setup' },
-  { id: '3', label: 'Run ralph.sh', description: 'Starts the autonomous loop', phase: 'setup' },
+  { id: '1', label: 'Write Goal in tasks.md', description: 'Define what you want to build', phase: 'setup' },
+  { id: '2', label: 'Run ./ralph.sh plan', description: 'Oracle breaks into tasks', phase: 'setup' },
+  { id: '3', label: 'Run ./ralph.sh validate', description: 'Check task structure', phase: 'validate' },
+  { id: '4', label: 'Run ./ralph.sh', description: 'Starts the worker loop', phase: 'setup' },
   // Loop phase
-  { id: '4', label: 'Amp picks a story', description: 'Finds next passes: false', phase: 'loop' },
-  { id: '5', label: 'Implements it', description: 'Writes code, runs tests', phase: 'loop' },
-  { id: '6', label: 'Commits changes', description: 'If tests pass', phase: 'loop' },
-  { id: '7', label: 'Updates prd.json', description: 'Sets passes: true', phase: 'loop' },
-  { id: '8', label: 'Logs to progress.txt', description: 'Saves learnings', phase: 'loop' },
-  { id: '9', label: 'More stories?', description: '', phase: 'decision' },
-  // Exit
-  { id: '10', label: 'Done!', description: 'All stories complete', phase: 'done' },
+  { id: '5', label: 'Find Ready Task', description: 'Check dependencies satisfied', phase: 'loop' },
+  { id: '6', label: 'Implement Task', description: 'Worker writes code, runs tests', phase: 'loop' },
+  { id: '7', label: 'Tests Pass?', description: '', phase: 'decision' },
+  // Retry branch
+  { id: '8', label: 'Retry with Backoff', description: 'Exponential delay', phase: 'retry' },
+  { id: '9', label: 'Max Retries?', description: '', phase: 'decision' },
+  // Success path continues
+  { id: '10', label: 'Commit Changes', description: 'If tests pass', phase: 'loop' },
+  { id: '11', label: 'Update tasks.md', description: 'Mark task [x] complete', phase: 'loop' },
+  { id: '12', label: 'Log to History', description: 'Save to .ralph/history/', phase: 'loop' },
+  { id: '13', label: 'More Tasks?', description: '', phase: 'decision' },
+  // Exit states
+  { id: '14', label: 'Done!', description: 'All tasks complete', phase: 'done' },
+  { id: '15', label: 'Exit with Error', description: 'Retries exhausted', phase: 'retry' },
+  { id: '16', label: 'Blocked!', description: 'Dependencies unsatisfied', phase: 'retry' },
 ];
 
 const notes = [
   {
     id: 'note-1',
-    appearsWithStep: 2,
-    position: { x: 340, y: 100 },
+    appearsWithStep: 3,
+    position: { x: 340, y: 180 },
     color: { bg: '#f5f0ff', border: '#8b5cf6' },
-    content: `{
-  "id": "US-001",
-  "title": "Add priority field to database",
-  "acceptanceCriteria": [
-    "Add priority column to tasks table",
-    "Generate and run migration",
-    "Typecheck passes"
-  ],
-  "passes": false
-}`,
+    content: `./ralph.sh validate checks:
+- Task format (T001, T002...)
+- Required fields present
+- Dependency references valid
+- No circular dependencies`,
   },
   {
     id: 'note-2',
+    appearsWithStep: 5,
+    position: { x: 340, y: 420 },
+    color: { bg: '#e6f3ff', border: '#4a90d9' },
+    content: `Dependency check:
+- Depends: T001, T002
+- Only runs if T001 & T002
+  are marked [x] complete`,
+  },
+  {
+    id: 'note-3',
     appearsWithStep: 8,
-    position: { x: 480, y: 620 },
+    position: { x: 680, y: 320 },
+    color: { bg: '#fff0f0', border: '#e53e3e' },
+    content: `Retry with exponential backoff:
+1st: 30s, 2nd: 60s, 3rd: 120s
+Configure via:
+  RALPH_MAX_RETRIES=2
+  RALPH_RETRY_DELAY=30`,
+  },
+  {
+    id: 'note-4',
+    appearsWithStep: 12,
+    position: { x: 480, y: 680 },
     color: { bg: '#fdf4f0', border: '#c97a50' },
-    content: `Also updates AGENTS.md with
-patterns discovered, so future
-iterations learn from this one.`,
+    content: `Logs to .ralph/history/
+YYYY-MM-DD.jsonl with:
+- timestamp, task, duration
+- exit_code, git_head`,
   },
 ];
 
@@ -123,17 +146,25 @@ const nodeTypes = { custom: CustomNode, note: NoteNode };
 const positions: { [key: string]: { x: number; y: number } } = {
   // Vertical setup flow on the left
   '1': { x: 20, y: 20 },
-  '2': { x: 80, y: 130 },
-  '3': { x: 60, y: 250 },
-  // Loop
-  '4': { x: 40, y: 420 },
-  '5': { x: 450, y: 300 },
-  '6': { x: 750, y: 450 },
-  '7': { x: 470, y: 520 },
-  '8': { x: 200, y: 620 },
-  '9': { x: 40, y: 720 },
-  // Exit
-  '10': { x: 350, y: 880 },
+  '2': { x: 40, y: 120 },
+  '3': { x: 60, y: 220 },
+  '4': { x: 40, y: 320 },
+  // Loop - find task and implement
+  '5': { x: 40, y: 450 },
+  '6': { x: 340, y: 450 },
+  '7': { x: 600, y: 450 },
+  // Retry branch (right side)
+  '8': { x: 750, y: 320 },
+  '9': { x: 900, y: 450 },
+  // Success path continues
+  '10': { x: 600, y: 580 },
+  '11': { x: 340, y: 580 },
+  '12': { x: 180, y: 700 },
+  '13': { x: 40, y: 800 },
+  // Exit states
+  '14': { x: 300, y: 920 },
+  '15': { x: 900, y: 580 },
+  '16': { x: -180, y: 550 },
   // Notes
   ...Object.fromEntries(notes.map(n => [n.id, n.position])),
 };
@@ -143,15 +174,25 @@ const edgeConnections: { source: string; target: string; sourceHandle?: string; 
   { source: '1', target: '2', sourceHandle: 'bottom', targetHandle: 'top' },
   { source: '2', target: '3', sourceHandle: 'bottom', targetHandle: 'top' },
   { source: '3', target: '4', sourceHandle: 'bottom', targetHandle: 'top' },
-  // Loop phase
-  { source: '4', target: '5', sourceHandle: 'right', targetHandle: 'left' },
-  { source: '5', target: '6', sourceHandle: 'right', targetHandle: 'top' },
-  { source: '6', target: '7', sourceHandle: 'left-source', targetHandle: 'right-target' },
-  { source: '7', target: '8', sourceHandle: 'left-source', targetHandle: 'right-target' },
-  { source: '8', target: '9', sourceHandle: 'left-source', targetHandle: 'right-target' },
-  { source: '9', target: '4', sourceHandle: 'top-source', targetHandle: 'bottom-target', label: 'Yes' },
-  // Exit
-  { source: '9', target: '10', sourceHandle: 'bottom', targetHandle: 'top', label: 'No' },
+  { source: '4', target: '5', sourceHandle: 'bottom', targetHandle: 'top' },
+  // Loop phase - find task to implement
+  { source: '5', target: '6', sourceHandle: 'right', targetHandle: 'left', label: 'Ready' },
+  { source: '5', target: '16', sourceHandle: 'left-source', targetHandle: 'right-target', label: 'Blocked' },
+  { source: '6', target: '7', sourceHandle: 'right', targetHandle: 'left' },
+  // Decision: Tests Pass?
+  { source: '7', target: '8', sourceHandle: 'top-source', targetHandle: 'bottom-target', label: 'No' },
+  { source: '7', target: '10', sourceHandle: 'bottom', targetHandle: 'top', label: 'Yes' },
+  // Retry loop
+  { source: '8', target: '9', sourceHandle: 'right', targetHandle: 'top' },
+  { source: '9', target: '6', sourceHandle: 'left-source', targetHandle: 'right-target', label: 'Retry' },
+  { source: '9', target: '15', sourceHandle: 'bottom', targetHandle: 'top', label: 'Exhausted' },
+  // Success path: commit, update, log
+  { source: '10', target: '11', sourceHandle: 'left-source', targetHandle: 'right-target' },
+  { source: '11', target: '12', sourceHandle: 'bottom', targetHandle: 'top' },
+  { source: '12', target: '13', sourceHandle: 'left-source', targetHandle: 'right-target' },
+  // Decision: More tasks?
+  { source: '13', target: '5', sourceHandle: 'top-source', targetHandle: 'bottom-target', label: 'Yes' },
+  { source: '13', target: '14', sourceHandle: 'bottom', targetHandle: 'top', label: 'No' },
 ];
 
 function createNode(step: typeof allSteps[0], visible: boolean, position?: { x: number; y: number }): Node {
@@ -325,8 +366,8 @@ function App() {
   return (
     <div className="app-container">
       <div className="header">
-        <h1>How Ralph Works with Amp</h1>
-        <p>Autonomous AI agent loop for completing PRDs</p>
+        <h1>How Ralph v2 Works with Amp</h1>
+        <p>Autonomous AI agent loop with task dependencies and retry logic</p>
       </div>
       <div className="flow-container">
         <ReactFlow
@@ -370,7 +411,7 @@ function App() {
         </button>
       </div>
       <div className="instructions">
-        Click Next to reveal each step
+        Click Next to reveal each step — includes validate, dependencies, and retry flow
       </div>
     </div>
   );

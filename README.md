@@ -32,8 +32,45 @@ cp tasks.md.example tasks.md
 # 3. Run planning (oracle creates task breakdown)
 ./ralph.sh plan
 
-# 4. Review tasks.md, then run workers
+# 4. Validate the task structure
+./ralph.sh validate
+
+# 5. Review tasks.md, then run workers
 ./ralph.sh [max_iterations]
+
+# 6. Check progress anytime
+./ralph.sh status
+```
+
+## Commands
+
+| Command | Description | When to Use |
+|---------|-------------|-------------|
+| `./ralph.sh plan` | Run oracle to create task breakdown from goal | After setting up tasks.md with your goal |
+| `./ralph.sh validate` | Validate tasks.md structure (format, dependencies) | After planning, before running workers |
+| `./ralph.sh status` | Show progress dashboard with task counts | Anytime to check progress |
+| `./ralph.sh [max]` | Run worker iterations (default: 10) | After planning and validation |
+| `./ralph.sh help` | Show usage and environment variables | When you need help |
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RALPH_MODEL` | Auto-detected | Override the AI model (e.g., `claude-sonnet`) |
+| `RALPH_MAX_RETRIES` | `2` | Maximum retry attempts on failure |
+| `RALPH_RETRY_DELAY` | `30` | Base delay in seconds for exponential backoff |
+
+Example usage:
+
+```bash
+# Use a specific model
+export RALPH_MODEL="claude-sonnet"
+
+# More retries with longer delay
+export RALPH_MAX_RETRIES=3
+export RALPH_RETRY_DELAY=60
+
+./ralph.sh
 ```
 
 ## How It Works
@@ -51,8 +88,8 @@ Ralph v2 uses a two-step workflow:
 │  ┌──────────────┐   ┌─────────────────────────────────────┐ │
 │  │ Project      │   │ Task List                           │ │
 │  │ - Goal       │   │ T001 [x] Add priority - Notes...    │ │
-│  │ - Branch     │   │ T002 [ ] Create UI                  │ │
-│  │ - Status     │   │ T003 [ ] Add filter                 │ │
+│  │ - Branch     │   │ T002 [ ] Create UI (Depends: T001)  │ │
+│  │ - Status     │   │ T003 [ ] Add filter (Depends: T002) │ │
 │  └──────────────┘   └─────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
          ↑                         ↑
@@ -67,13 +104,14 @@ Ralph v2 uses a two-step workflow:
 
 | File | Purpose |
 |------|---------|
-| `ralph.sh` | Phase-based bash loop |
+| `ralph.sh` | Phase-based bash loop with retry logic |
 | `tasks.md` | Single source of truth (goal, tasks, notes) |
 | `tasks.md.example` | Template to copy |
 | `prompt.md` | Worker prompt (uses librarian for context) |
 | `prompt.plan.md` | Planning prompt (uses oracle) |
 | `skills/` | Amp skills for PRD and conversion |
 | `flowchart/` | Interactive visualization |
+| `.ralph/history/` | Execution logs (JSONL format) |
 
 ## tasks.md Structure
 
@@ -92,6 +130,7 @@ Ralph v2 uses a two-step workflow:
 ### T001 - Add priority column
 - Status: [ ] TODO
 - Priority: P1
+- Depends: 
 - Outcome: Tasks table has priority column
 - Context:
   - `db/schema.ts`
@@ -103,7 +142,40 @@ Ralph v2 uses a two-step workflow:
   - Files: `db/schema.ts`, `db/migrations/001.sql`
   - Findings: Use sql`CREATE TYPE` for enums
   - Next context: `src/types/task.ts` needs type export
+
+### T002 - Create PriorityBadge component
+- Status: [ ] TODO
+- Priority: P1
+- Depends: T001
+- Outcome: Reusable badge component for priority display
+- Context:
+  - `src/components/Badge.tsx`
+- Checks:
+  - `npm run typecheck`
+  - `npm test`
+- Notes:
+  - (written by worker after completion)
 ```
+
+## Task Dependencies
+
+Tasks can specify dependencies using the `- Depends:` field:
+
+```markdown
+### T003 - Add priority filter
+- Status: [ ] TODO
+- Depends: T001, T002
+```
+
+Ralph will:
+1. Only run tasks whose dependencies are all complete (`[x]`)
+2. Skip blocked tasks and report BLOCKED if no tasks are ready
+3. Allow parallel-safe tasks to run when their dependencies are satisfied
+
+Run `./ralph.sh validate` to check for:
+- Invalid dependency references
+- Circular dependencies
+- Malformed task structure
 
 ## Status Flow
 
@@ -128,6 +200,7 @@ export RALPH_MODEL="claude-sonnet"
 Each iteration spawns a **new Amp instance** with clean context. Memory persists via:
 - Git history (commits)
 - `tasks.md` (codebase map, task notes, findings)
+- `.ralph/history/` (execution logs)
 
 ### Small Tasks
 
@@ -156,7 +229,29 @@ After completing a task, Worker writes:
 
 This context helps subsequent Workers avoid re-discovering the same information.
 
-## Debugging
+### Retry Logic
+
+When an iteration fails, Ralph automatically retries with exponential backoff:
+- First retry: `RALPH_RETRY_DELAY` seconds (default: 30)
+- Second retry: `2 × RALPH_RETRY_DELAY` seconds
+- Maximum attempts: `RALPH_MAX_RETRIES + 1`
+
+All attempts are logged to `.ralph/history/`.
+
+## Troubleshooting
+
+### Common Issues
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| "Tasks not planned yet" | Status is PLANNING_PENDING | Run `./ralph.sh plan` first |
+| "BLOCKED: TODO tasks exist but dependencies not satisfied" | Dependencies not complete | Check `- Depends:` fields; ensure prerequisite tasks are `[x]` |
+| "Circular dependency detected" | Tasks depend on each other | Run `./ralph.sh validate` to find the cycle |
+| "Unknown status" | Invalid Status field | Set status to `IMPLEMENTING` or `COMPLETE` |
+| "Missing tasks.md" | File not created | Copy from `tasks.md.example` and customize |
+| "Max retries exhausted" | Repeated failures | Check `.iteration-log.txt`; increase `RALPH_MAX_RETRIES` |
+
+### Debugging Commands
 
 ```bash
 # Check current status
@@ -165,8 +260,23 @@ grep "^- Status:" tasks.md
 # See which tasks are done
 grep -E "^### T[0-9]|^- Status:" tasks.md
 
+# Check task dependencies
+grep -E "^### T[0-9]|^- Depends:" tasks.md
+
+# Validate task structure
+./ralph.sh validate
+
+# View progress dashboard
+./ralph.sh status
+
 # Check git history
 git log --oneline -10
+
+# View execution history
+cat .ralph/history/$(date +%Y-%m-%d).jsonl | jq .
+
+# Check last iteration output
+cat .iteration-log.txt
 ```
 
 ## Archiving
